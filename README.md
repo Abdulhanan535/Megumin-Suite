@@ -10,7 +10,7 @@
 
 **Megumin Suite** is a full-stack overhaul to how SillyTavern presets work. It replaces your preset, your memory system, your NPC management, and your image generation — all in one extension. V9 introduces the new **Mirage**, **Xin**, **Kuromaku**, and **Cui** presets — a complete generational leap in narrative quality, psychology, and world simulation.
 
-[Features](#-core-features) • [The V9 Presets](#the-v9-presets) • [Story Director](#story-director-1) • [NPC Bank](#automated-npc-bank) • [Dynamic Ban List](#dynamic-ban-list-ai-slop-detector) • [Memory Core](#memory-core-3-tier-context) • [Image Gen](#image-gen-kazuma-comfyui) • [Installation](#%EF%B8%8F-installation)
+[Features](#-core-features) • [Installation](#%EF%B8%8F-installation) • [The V9 Presets](#the-v9-presets) • [Memory Core](#-memory-core-3-tier-context) • [Image Gen](#image-gen-kazuma-comfyui)
 
 </div>
 
@@ -214,7 +214,7 @@ Or just watch the **Install video:** [YouTube Video](https://www.youtube.com/wat
 
 *   **Does this extension mess with my other presets?** No — your other presets work just fine. Megumin Suite only injects its rules into its own designated preset. Your existing presets remain completely untouched.
 *   **Vector Storage (Optional):** If you're using Semantic Embeddings in the Memory Core, you can change the model — it's `Cohee/jina-embeddings-v2-base-en` by default. If that's too heavy for your PC, use `Xenova/all-MiniLM-L6-v2`. Change it inside `sillytavern/config.yaml`.
-*   **Old Versions:** Legacy docs are available here: [V4](https://github.com/Arif-salah/Megumin-Suite/tree/V4.1) • [V5](https://github.com/Arif-salah/Megumin-Suite/tree/V5) • [V6](https://github.com/Arif-salah/Megumin-Suite/tree/V6) • [V7](https://github.com/Arif-salah/Megumin-Suite/tree/V7) • [V8](https://github.com/Arif-salah/Megumin-Suite/tree/V8)
+*   **Old Versions:** Legacy docs are available here: [V4](https://github.com/Arif-salah/Megumin-Suite/tree/V4.1) • [V5](https://github.com/Arif-salah/Megumin-Suite/tree/V5) • [V6](https://github.com/Arif-salah/Megumin-Suite/tree/V6) • [V7](https://github.com/Arif-salah/Megumin-Suite/tree/V7)
 
 ---
 
@@ -250,8 +250,6 @@ Megumin Suite is free and always will be. If it saved you hours of prompt engine
 
 💳 **PayPal:** `arifsalah10@gmail.com`
 🪙 **Crypto (LTC):** `LSjf1DczHxs3GEbkoMmi1UWH2GikmXDtis`
-
-**Quick note**: In case you donate money and you are in the **Discord server** then please put **your Discord username** in the PayPal notes to get the **Donator role**. With this role, you will have **access to beta builds before they become publicly available**. Other people will be able to test betas too but number of slots is limited. Donators always will get slots first without any questions.
 
 ⭐ *Not in a position to donate? Starring the repo and sharing it helps just as much.*
 
