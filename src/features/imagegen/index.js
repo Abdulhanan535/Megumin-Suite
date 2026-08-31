@@ -1126,7 +1126,7 @@ export async function igGenerateWithComfy(positivePrompt, target = null) {
         }
     };
 
-    const progress = openComfyProgressSocket(s.comfyUrl, comfyClientId, {
+    const igSocketCallbacks = {
         onProgress: (value, max) => {
             const pct = Math.round((value / max) * 100);
             showKazumaProgress(`Rendering Image... ${value}/${max} (${pct}%)`, pct);
@@ -1150,9 +1150,39 @@ export async function igGenerateWithComfy(positivePrompt, target = null) {
             if (data.prompt_id && igOwnPromptId && data.prompt_id !== igOwnPromptId) return;
             igWsReject(new Error(data.exception_message || "generation was interrupted or failed on the ComfyUI server"));
         } : null,
-    });
+    };
+    let progress = openComfyProgressSocket(s.comfyUrl, comfyClientId, igSocketCallbacks);
+
+    // WS delivery is dead without the socket, so the job waits for a real
+    // connection before being queued — a refused or blocked socket surfaces as
+    // a fast, visible failure instead of five silent minutes. Tunnels that
+    // strip TLS (Caddy/NPM) serve plain ws:// behind an https:// URL, so one
+    // retry with the downgraded scheme is worth a shot; from an https page the
+    // browser blocks that as mixed content and the retry just fails fast too.
+    const igWsAwaitOpen = async () => {
+        let opened = await Promise.race([
+            progress.opened,
+            new Promise((r) => setTimeout(() => r("timeout"), 15000)),
+        ]);
+        if (opened === true) return true;
+        progress.close();
+        if (/^https:/i.test(String(s.comfyUrl || "").trim())) {
+            console.debug("[Megumin Suite] ComfyUI wss connect failed; retrying plain ws:// (TLS-stripping tunnel?)");
+            progress = openComfyProgressSocket(String(s.comfyUrl).replace(/^https:/i, "http:"), comfyClientId, igSocketCallbacks);
+            opened = await Promise.race([
+                progress.opened,
+                new Promise((r) => setTimeout(() => r("timeout"), 15000)),
+            ]);
+            if (opened === true) return true;
+            progress.close();
+        }
+        return false;
+    };
 
     try {
+        if (igUseWs && !(await igWsAwaitOpen())) {
+            throw new Error("websocket connection to ComfyUI failed (tried ws and wss) — check the URL/tunnel, or set Image Delivery back to Polling");
+        }
         const res = await fetch(`${s.comfyUrl}/prompt`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: workflow, client_id: comfyClientId }) });
         if (!res.ok) throw new Error("Failed");
         const data = await res.json();
@@ -1163,8 +1193,9 @@ export async function igGenerateWithComfy(positivePrompt, target = null) {
         if (igUseWs) {
             // WebSocket delivery: the SaveImageWebsocket node pushes the finished
             // image over the progress socket. No history poll, no /view download,
-            // nothing written on the ComfyUI host. A socket that never opens just
-            // runs into the timeout below, which surfaces as a normal failure.
+            // nothing written on the ComfyUI host. The connection itself was
+            // verified before the job was queued; the timeout below covers a
+            // socket that dies mid-render.
             igWsTimer = setTimeout(() => igWsReject(new Error("timed out after 300s waiting for the image over the websocket")), 300000);
             const decoded = await igWsDone;
             showKazumaProgress("Saving...");

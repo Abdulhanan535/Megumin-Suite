@@ -72,6 +72,9 @@ export async function decodeComfyImageFrame(frame) {
 export function openComfyProgressSocket(comfyUrl, clientId, { onProgress, onNode, onBinary, onError } = {}) {
     let ws = null;
     let closed = false;
+    let openedResolve = null;
+    const opened = new Promise((resolve) => { openedResolve = resolve; });
+    const resolveOpened = (ok) => { if (openedResolve) { openedResolve(ok); openedResolve = null; } };
 
     try {
         // http://host:8188 → ws://host:8188/ws , https → wss.
@@ -80,8 +83,17 @@ export function openComfyProgressSocket(comfyUrl, clientId, { onProgress, onNode
         const base = String(comfyUrl || "").trim().replace(/\/+$/, "");
         const wsUrl = base.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:")
             + "/ws?clientId=" + encodeURIComponent(clientId);
+        // The exact URL goes to the console: when a tunnel or proxy mangles the
+        // scheme or the path, this line is the difference between debugging and
+        // guessing.
+        console.debug("[Megumin Suite] ComfyUI progress socket →", wsUrl);
         ws = new WebSocket(wsUrl);
 
+        // WS-mode delivery hangs off a real connection, so open and pre-open
+        // failures resolve `opened` instead of dying silently. The promise is
+        // single-shot: later errors after a successful open are no-ops.
+        ws.onopen = () => { resolveOpened(true); };
+        ws.onclose = () => { resolveOpened(false); };
         ws.onmessage = (ev) => {
             if (closed) return;
             // Binary frames carry previews and (with SaveImageWebsocket) the finished
@@ -107,13 +119,15 @@ export function openComfyProgressSocket(comfyUrl, clientId, { onProgress, onNode
 
         // Silent on error: a missing socket costs the caller its percentage, nothing
         // more, and ComfyUI setups behind proxies that block websockets are common.
-        ws.onerror = () => { };
+        ws.onerror = () => { resolveOpened(false); };
     } catch (e) {
         console.debug("[Megumin Suite] ComfyUI progress socket unavailable; using the indeterminate bar.", e);
+        resolveOpened(false);
         ws = null;
     }
 
     return {
+        opened,
         close() {
             closed = true;
             try { if (ws) ws.close(); } catch (e) { /* already gone */ }
