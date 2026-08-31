@@ -14,7 +14,7 @@ V10 is based on the following principle: **there are no villains and there are n
 
 This feature is present in both V10 engines. They just describe it differently. But in addition to it, V10 provides **Story Config** tab, where you can control the style of your story, and **Blocks**: every tracker in one single card below the reply.
 
-[Features](#-core-features) • [Installation](#%EF%B8%8F-installation) • [The V10 Engines](#the-v10-engines) • [Blocks](#blocks) • [Memory Core](#memory-core-3-tier-context)
+[Features](#-core-features) • [Installation](#%EF%B8%8F-installation) • [The V10 Engines](#the-v10-engines) • [Blocks](#blocks) • [Memory Core](#memory-core-3-tier-context) • [Donate](#-support-the-project)
 
 </div>
 
