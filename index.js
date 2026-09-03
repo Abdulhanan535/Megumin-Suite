@@ -129,6 +129,8 @@ import {
 } from "./src/features/imagegen/index.js";
 import { buildBaseDict } from "./src/engine/buildBaseDict.js";
 import { handlePromptInjection } from "./src/engine/injection.js";
+import { meguminHandleInlineWriter } from "./src/engine/imageInline.js";
+import { registerCastGenCommand } from "./src/features/castgen/index.js";
 import { updateLiveTokenCount } from "./src/core/tokens.js";
 import { initDraggableButton, updateCharacterDisplay, discoverDefaultImages } from "./src/ui/launcher.js";
 import { tabsUI, switchTab, updateGlobalSyncButton, toggleTabGlobalSync } from "./src/ui/tabs.js";
@@ -239,6 +241,7 @@ jQuery(async () => {
         migrateRenamedTabs();
         migrateUtilityPrefillFlag();
         initSidePanel({ profileGetter: () => localProfile });
+        registerCastGenCommand();
         const h = await $.get(`${extensionFolderPath}/example.html`);
         $("body").append(h);
         initDraggableButton();
@@ -706,6 +709,16 @@ jQuery(async () => {
                             });
                         }, 500 + (idx * 1500)); // Stagger calls slightly to prevent overloading ComfyUI
                     });
+                    return;
+                }
+
+                // ── SIDE-MODEL INLINE WRITER ──
+                // No main-model tag found and image gen is on: in "side" mode the
+                // utility backend writes the prompt here. Runs only on this
+                // fall-through path, so a reply the main model tagged is never
+                // double-generated.
+                if (s.inlineWriter === "side") {
+                    meguminHandleInlineWriter();
                 }
             });
             const meguminSwipeHandler = async (data) => {

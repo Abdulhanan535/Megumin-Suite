@@ -26,6 +26,8 @@ import { memGetRelevantVaultEntries } from "../features/memory/index.js";
 import { meguminRollD20s } from "../utils/dice.js";
 import { meguminOverridableSlots, meguminSlotIsLive, meguminModuleTrigger } from "../../data/slots.js";
 import { resolveSlot } from "../core/sharedFragments.js";
+import { meguminTaskBackend } from "./utility.js";
+import { meguminInlineLighterImg1 } from "./imageInline.js";
 
 export function buildBaseDict(isTokenCount = false) {
     const dict = {};
@@ -429,21 +431,32 @@ export function buildBaseDict(isTokenCount = false) {
 
             const template = customIg.injectionTemplate || defIg.injectionTemplate;
             let extraSection = ig.promptExtra ? `Extra Instructions: ${ig.promptExtra}` : "";
-            let directLangStr = ig.directLanguage ? "**DIRECT LANGUAGE:** Use exact Booru tags only. \"naked\" not \"wearing nothing.\" \"erection\" not \"visible arousal.\"\n\n**NSFW TAG REFERENCE (use when scene is explicit):**\nBody: naked, nude, topless, exposed nipples, small breasts, medium breasts, large breasts, spread legs, ass, erection, veins, veiny penis\nActions: hetero, sex, vaginal, anal, oral, fellatio, after fellatio, paizuri, straddling, riding, missionary, doggystyle, cowgirl position, moaning, open mouth, tongue out, ahegao, clenching teeth\nFluids: cum, cum on body, cum on breasts, cum on face, cum on hair, cum on tongue, cum in mouth, cum inside, ejaculation, facial, saliva, sweat\nState: flushed face, heavy breathing, trembling, crying with eyes open, half-closed eyes, solo focus" : "";
+            let directLangStr = ig.directLanguage ? "**DIRECT LANGUAGE:** Use exact Booru tags only. \"naked\" not \"wearing nothing.\" \"erection\" not \"visible arousal.\"\n\n**NSFW TAG REFERENCE (use when scene is explicit):**\nBody: naked, nude, topless, exposed nipples, small breasts, medium breasts, large breasts, spread legs, ass, erection, veins, veiny penis\nActions: hetero, sex, vaginal, anal, oral, fellatio, after fellatio, paizuri, straddling, riding, missionary, doggystyle, cowgirl position, moaning, open mouth, tongue out, ahegao, clenching teeth\nFluids: cum, cum on body, cum on breasts, cum on face, cum on face, cum on hair, cum in mouth, cum inside, ejaculation, facial, saliva, sweat\nState: flushed face, heavy breathing, trembling, crying with eyes open, half-closed eyes, solo focus" : "";
             let npcTagsStr = getRelevantNpcImageTags(); // <-- GET THE TAGS
             const imageCountStr = ig.imageCount || 1; 
 
-            dict["[[img1]]"] = template
-                .replace('{{conditionalText}}', conditionalText)
-                .replace('{{imageCount}}', imageCountStr)
-                .replace('{{templateRules}}', rules)
-                .replace('{{promptExtra}}', extraSection)
-                .replace('{{directLanguage}}', directLangStr)
-                .replace('{{npcImageTags}}', npcTagsStr) // <-- INJECT THEM
-                .replace('{{templateExamples}}', examples);
-            
-            // Set the new value for img2 dynamically based on the count!
-            dict["[[img2]]"] = ` and the ${imageCountStr} image tag`;
+            // Side-model inline writing: the main model pays NO tag tokens — the
+            // lighter variant tells it an image is coming but forbids the tag;
+            // the utility backend writes the prompt after the reply (imageInline.js).
+            if (ig.inlineWriter === "side" && meguminTaskBackend("imageInline")) {
+                dict["[[img1]]"] = meguminInlineLighterImg1({
+                    conditionalText, templateRules: rules, extraSection,
+                    directLangStr, npcTagsStr, templateExamples: examples
+                });
+                dict["[[img2]]"] = "";
+            } else {
+                dict["[[img1]]"] = template
+                    .replace('{{conditionalText}}', conditionalText)
+                    .replace('{{imageCount}}', imageCountStr)
+                    .replace('{{templateRules}}', rules)
+                    .replace('{{promptExtra}}', extraSection)
+                    .replace('{{directLanguage}}', directLangStr)
+                    .replace('{{npcImageTags}}', npcTagsStr) // <-- INJECT THEM
+                    .replace('{{templateExamples}}', examples);
+
+                // Set the new value for img2 dynamically based on the count!
+                dict["[[img2]]"] = ` and the ${imageCountStr} image tag`;
+            }
         } else {
             dict["[[img1]]"] = "";
             dict["[[img2]]"] = "";
@@ -460,6 +473,18 @@ export function buildBaseDict(isTokenCount = false) {
     if (dict["[[infoblock]]"]) dict["[[infoblock2]]"] = "[World state block here]"; else dict["[[infoblock2]]"] = "";
     if (dict["[[storytracker]]"]) dict["[[storytracker2]]"] = "[Story tracker here]"; else dict["[[storytracker2]]"] = "";
     if (dict["[[npc_inner_chatter]]"]) dict["[[npc_inner_chatter2]]"] = "[Npc inner chatter here]"; else dict["[[npc_inner_chatter2]]"] = "";
+    // zTracker port: numbered twins for the 10 scene-tracking blocks, same
+    // pattern as above — a preset may emit a block a second time further down.
+    if (dict["[[sceneInfo]]"]) dict["[[sceneInfo2]]"] = "[Scene info here]"; else dict["[[sceneInfo2]]"] = "";
+    if (dict["[[roster]]"]) dict["[[roster2]]"] = "[Roster here]"; else dict["[[roster2]]"] = "";
+    if (dict["[[checks]]"]) dict["[[checks2]]"] = "[Checks here]"; else dict["[[checks2]]"] = "";
+    if (dict["[[quests]]"]) dict["[[quests2]]"] = "[Quests here]"; else dict["[[quests2]]"] = "";
+    if (dict["[[morale]]"]) dict["[[morale2]]"] = "[Morale here]"; else dict["[[morale2]]"] = "";
+    if (dict["[[worldEvent]]"]) dict["[[worldEvent2]]"] = "[World event here]"; else dict["[[worldEvent2]]"] = "";
+    if (dict["[[seeds]]"]) dict["[[seeds2]]"] = "[Seeds here]"; else dict["[[seeds2]]"] = "";
+    if (dict["[[gmNotebook]]"]) dict["[[gmNotebook2]]"] = "[GM notebook here]"; else dict["[[gmNotebook2]]"] = "";
+    if (dict["[[charState]]"]) dict["[[charState2]]"] = "[Character state here]"; else dict["[[charState2]]"] = "";
+    if (dict["[[npcMind]]"]) dict["[[npcMind2]]"] = "[NPC mind here]"; else dict["[[npcMind2]]"] = "";
 
     // Resolve early-evaluated tokens inside all other strings to prevent them from being missed and then cleaned up
     const earlyTokens = ["[[count]]", "[[Language]]", "[[pronouns]]", "[[DNRATIO]]", "[[img2]]", "[[v9_lean_min]]", "[[v9_lean_max]]", "[[v9_full_min]]", "[[v9_full_max]]"];

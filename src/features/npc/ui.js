@@ -12,6 +12,9 @@ import { DEFAULT_PROMPTS } from "../../prompts/index.js";
 import { renderPromptEditor } from "../../ui/promptEditor.js";
 import { downloadJsonFile } from "../../utils/download.js";
 import { getChatForNpcScan } from "../../engine/chatText.js";
+import { runUtilityGeneration, meguminTaskBackend } from "../../engine/utility.js";
+import { buildNpcScanMessages, buildNpcUpdateMessages } from "../../engine/taskPrompts.js";
+import { meguminCastGenerate, castGenSettings } from "../castgen/index.js";
 import { npcBuildTextFromData, npcParseBlock, meguminFindNpcDossiers, npcCreateRecord } from "./data.js";
 import { npcBodyFields, npcVitalsFields, NPC_FIELD_TYPES, NPC_DEFAULT_FIELDS, npcBuildUpdatePrompt } from "./fields.js";
 import { npcParseUpdateBlocks, npcApplyUpdates } from "./updates.js";
@@ -23,6 +26,7 @@ export function renderNpcBank(c) {
     c.empty();
     const nb = localProfile.npcBank;
     if (nb.injectionLimit === undefined) nb.injectionLimit = 3;
+    const cg = castGenSettings();
 
     c.append(`
         <div class="mtab-header">
@@ -103,6 +107,35 @@ export function renderNpcBank(c) {
                         <div class="set-desc">How many recent messages to read when clicking "Scan Story".<br><span style="color:var(--gold); font-weight: 600;">⚠️ Note: High numbers consume massive context limits and API tokens!</span></div>
                     </div>
                     <input type="number" id="npc_scan_depth" class="ps-modern-input" value="${nb.scanDepth || 60}" min="10" style="width: 90px; text-align: center; background: rgba(0,0,0,0.2);" />
+                </div>
+            </div>
+
+            <!-- DYNAMIC CHARACTERS (cast generator) -->
+            <div class="mtab-panel" style="margin-bottom: 16px;">
+                <div class="mtab-panel-title purple" style="margin-bottom: 10px;"><i class="fa-solid fa-wand-magic-sparkles"></i> Dynamic Characters</div>
+                <div class="mtab-setting-row">
+                    <div class="set-info">
+                        <div class="set-label">Scene Guidance</div>
+                        <div class="set-desc">Style guidance for the generated cast, and the default text offered in the Start Scene popup.</div>
+                    </div>
+                    <textarea id="npc_cast_guidance" class="ps-modern-input" rows="2" placeholder="e.g. dark fantasy, a smuggler with a debt to pay" style="width: 55%; background: rgba(0,0,0,0.2);">${escapeHtmlAttr(cg.guidance || "")}</textarea>
+                </div>
+                <div class="mtab-setting-row">
+                    <div class="set-info">
+                        <div class="set-label">Temperature / Max Tokens</div>
+                        <div class="set-desc">Generation settings for the cast call. The backend picker lives in Global Settings → Utility Backends ("Cast Generator").</div>
+                    </div>
+                    <div style="display:flex; gap:8px;">
+                        <input type="number" id="npc_cast_temp" class="ps-modern-input" value="${cg.temperature}" step="0.1" min="0" max="2" style="width: 80px; text-align: center; background: rgba(0,0,0,0.2);" />
+                        <input type="number" id="npc_cast_maxtok" class="ps-modern-input" value="${cg.maxTokens}" step="128" min="256" max="8192" style="width: 90px; text-align: center; background: rgba(0,0,0,0.2);" />
+                    </div>
+                </div>
+                <div class="mtab-setting-row" style="padding-bottom: 0; border: none;">
+                    <div class="set-info">
+                        <div class="set-label">Start Scene</div>
+                        <div class="set-desc">One-shot: describe a scene opening, the backend builds a cast, every member lands in the NPC Bank below. Same call as <code>/dynchar</code>.</div>
+                    </div>
+                    <button id="npc_btn_start_scene" class="ps-modern-btn primary" style="padding: 6px 14px; font-size: 0.75rem; background: linear-gradient(135deg, #a855f7, #7c3aed); color: #fff; border: none;"><i class="fa-solid fa-clapperboard"></i> Start Scene</button>
                 </div>
             </div>
 
@@ -291,9 +324,21 @@ export function renderNpcBank(c) {
             const chat = context?.chat;
             const msgIndex = (chat && chat.length > 0) ? chat.length - 1 : 0;
             const existingNames = (localProfile.npcBank.npcs || []).map(n => n.name).join(", ");
-            setActiveNpcScanRequest({ chatText, existingNames });
-            
-            let rawOutput = await generateQuietPrompt({ prompt: "___PS_NPC_SCAN___" });
+
+            // Per-task utility backend: direct backend calls the endpoint itself;
+            // "main" parks the marker and uses the interceptor as before.
+            let rawOutput;
+            if (meguminTaskBackend("npcScan")) {
+                const built = buildNpcScanMessages({ chatText, existingNames });
+                rawOutput = (await runUtilityGeneration("npcScan", built.messages)).text;
+            } else {
+                setActiveNpcScanRequest({ chatText, existingNames });
+                try {
+                    rawOutput = await generateQuietPrompt({ prompt: "___PS_NPC_SCAN___" });
+                } finally {
+                    setActiveNpcScanRequest(null);
+                }
+            }
             
             let addedCount = 0;
             for (const dossier of meguminFindNpcDossiers(rawOutput)) {
@@ -309,13 +354,25 @@ export function renderNpcBank(c) {
             if (addedCount > 0) { saveProfileToMemory(); renderNpcList(); toastr.success(`Found and added ${addedCount} new NPC(s)!`); } 
             else { toastr.info("No new significant NPCs found in the story."); }
         } catch (e) { toastr.error("Failed to scan story for NPCs."); } 
-        finally { setActiveNpcScanRequest(null); btn.prop("disabled", false).html(`<i class="fa-solid fa-radar"></i> Scan Story`); }
+        finally { btn.prop("disabled", false).html(`<i class="fa-solid fa-radar"></i> Scan Story`); }
     });
 
     $("#npc_scan_depth").on("input change", function() {
         let val = parseInt($(this).val()); if (isNaN(val) || val < 1) val = 60;
         localProfile.npcBank.scanDepth = val; saveProfileToMemory();
     });
+
+    // ── DYNAMIC CHARACTERS (cast generator) ──
+    $("#npc_cast_guidance").on("input", function () {
+        castGenSettings().guidance = $(this).val(); saveProfileDebounced();
+    });
+    $("#npc_cast_temp").on("input", function () {
+        castGenSettings().temperature = Number($(this).val()) || 0.8; saveProfileDebounced();
+    });
+    $("#npc_cast_maxtok").on("input", function () {
+        castGenSettings().maxTokens = Number($(this).val()) || 2048; saveProfileDebounced();
+    });
+    $("#npc_btn_start_scene").on("click", function () { meguminCastGenerate(); });
 
     if (nb.enabled) renderNpcList();
 }
@@ -684,16 +741,33 @@ export function renderNpcList() {
             // built from another chat's story would be worse than not applying it.
             const identity = meguminActiveDataIdentity();
 
-            setActiveNpcUpdateRequest({
-                npcName: target.name,
-                npcText: npcBuildTextFromData(target),
-                chatText: getChatForNpcScan(),
-                rules
-            });
-            try {
-                const raw = await generateQuietPrompt({ prompt: "___PS_NPC_UPDATE___" });
-                const cleaned = String(raw || "").replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+            // Per-task utility backend: direct backend calls the endpoint itself;
+            // "main" parks the marker and uses the interceptor as before.
+            let cleaned;
+            if (meguminTaskBackend("npcUpdate")) {
+                const built = buildNpcUpdateMessages({
+                    npcName: target.name,
+                    npcText: npcBuildTextFromData(target),
+                    chatText: getChatForNpcScan(),
+                    rules
+                });
+                cleaned = (await runUtilityGeneration("npcUpdate", built.messages)).text;
+            } else {
+                setActiveNpcUpdateRequest({
+                    npcName: target.name,
+                    npcText: npcBuildTextFromData(target),
+                    chatText: getChatForNpcScan(),
+                    rules
+                });
+                try {
+                    const raw = await generateQuietPrompt({ prompt: "___PS_NPC_UPDATE___" });
+                    cleaned = String(raw || "").replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+                } finally {
+                    setActiveNpcUpdateRequest(null);
+                }
+            }
 
+            try {
                 if (meguminActiveDataIdentity() !== identity) {
                     console.debug(`[Megumin-Suite] Forced NPC update discarded: it was requested in "${identity}" but "${meguminActiveDataIdentity()}" is active now.`);
                     return;
@@ -729,7 +803,6 @@ export function renderNpcList() {
                 console.error("[Megumin Suite] Forced NPC update failed", err);
                 toastr.error(`Could not update ${target.name}.`);
             } finally {
-                setActiveNpcUpdateRequest(null);
                 // The list may have been redrawn already, in which case this
                 // button is gone and the reset is a no-op.
                 btn.prop("disabled", false).html(`<i class="fa-solid fa-arrows-rotate"></i>`);

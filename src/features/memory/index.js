@@ -28,6 +28,8 @@ import { renderPromptEditor } from "../../ui/promptEditor.js";
 import { downloadJsonFile } from "../../utils/download.js";
 import { meguminCleanChatHistoryText } from "../../engine/chatText.js";
 import { useMeguminEngine } from "../../engine/tasks.js";
+import { runUtilityGeneration, meguminTaskBackend } from "../../engine/utility.js";
+import { buildMemorySummarizeMessages } from "../../engine/taskPrompts.js";
 import { memGetCachedKeywords, memExtractKeywords, memStringHash } from "./keywords.js";
 import {
     memGetCollectionId, memInsertToVectorDB, memDeleteFromVectorDB,
@@ -1014,7 +1016,17 @@ export async function memProcessPendingChunks(isAuto = false) {
             let summaryResult = "";
             setActiveMemorySummarizationRequest(chunkData.text);
 
-            if (!mem.backend || mem.backend === "direct") {
+            // The per-task utility backend decides the road: a configured direct
+            // backend calls the endpoint itself (parallel-safe with roleplay),
+            // "main" routes through the interceptor exactly as before. The old
+            // "engine" preset path still works via useMeguminEngine.
+            const memBackend = meguminTaskBackend("memorySummarize");
+            const built = buildMemorySummarizeMessages(chunkData.text);
+
+            if (memBackend) {
+                const { text } = await runUtilityGeneration("memorySummarize", built.messages);
+                summaryResult = text;
+            } else if (!mem.backend || mem.backend === "direct") {
                 summaryResult = await generateQuietPrompt({ prompt: "___PS_MEMORY_SUMMARIZE___" });
             } else {
                 await useMeguminEngine(async () => {

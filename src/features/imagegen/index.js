@@ -24,6 +24,8 @@ import { renderPromptEditor } from "../../ui/promptEditor.js";
 import { showKazumaProgress } from "../../ui/progress.js";
 import { meguminCleanChatHistoryText } from "../../engine/chatText.js";
 import { useMeguminEngine } from "../../engine/tasks.js";
+import { runUtilityGeneration, meguminTaskBackend, meguminStripThink } from "../../engine/utility.js";
+import { buildImageGenMessages } from "../../engine/taskPrompts.js";
 import { KAZUMA_PLACEHOLDERS, RESOLUTIONS } from "../../../data/image_data.js";
 import { getRelevantNpcImageTags } from "../npc/data.js";
 import { meguminScheduleBlocksRefresh } from "../blocks/chat.js";
@@ -102,9 +104,9 @@ export function renderImageGen(c) {
             </div>
 
             <!-- Triggers & Formatting -->
-            <div class="mtab-panel" style="margin-bottom:16px;">
-                <div class="mtab-panel-title gold"><i class="fa-solid fa-pen-nib"></i> Triggers & Formatting</div>
-                <div style="display: flex; gap: 15px; margin-bottom: 15px;">
+                <div class="mtab-panel" style="margin-bottom:16px;">
+                    <div class="mtab-panel-title gold"><i class="fa-solid fa-pen-nib"></i> Triggers & Formatting</div>
+                    <div style="display: flex; gap: 15px; margin-bottom: 15px;">
                     <div style="flex: 1;">
                         <div style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); margin-bottom: 4px;">Trigger Mode</div>
                         <select id="ig_trigger_mode" class="ps-modern-input" style="padding: 8px; font-size: 0.8rem; cursor: pointer;">
@@ -112,6 +114,21 @@ export function renderImageGen(c) {
                             <option value="frequency" ${s.triggerMode === 'frequency' ? 'selected' : ''}>After X Replies</option>
                             <option value="conditional" ${s.triggerMode === 'conditional' ? 'selected' : ''}>Only when character sends a pic</option>
                             <option value="manual" ${s.triggerMode === 'manual' ? 'selected' : ''}>Manual Button Only</option>
+                        </select>
+                    </div>
+                    <div style="flex: 1;">
+                        <div style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); margin-bottom: 4px;">Inline Prompt Writer</div>
+                        <select id="ig_inline_writer" class="ps-modern-input" style="padding: 8px; font-size: 0.8rem; cursor: pointer;">
+                            <option value="main" ${s.inlineWriter !== 'side' ? 'selected' : ''}>Main Model (writes the tag)</option>
+                            <option value="side" ${s.inlineWriter === 'side' ? 'selected' : ''}>Side Model (fast backend writes it)</option>
+                        </select>
+                    </div>
+                    <div style="flex: 1; display: ${s.inlineWriter === 'side' ? 'block' : 'none'};" id="ig_inline_trigger_container">
+                        <div style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); margin-bottom: 4px;">Side Trigger</div>
+                        <select id="ig_inline_trigger_mode" class="ps-modern-input" style="padding: 8px; font-size: 0.8rem; cursor: pointer;">
+                            <option value="always" ${s.inlineTriggerMode !== 'marker' && s.inlineTriggerMode !== 'frequency' ? 'selected' : ''}>Every AI Reply</option>
+                            <option value="marker" ${s.inlineTriggerMode === 'marker' ? 'selected' : ''}>Only on a bare &lt;img&gt; marker</option>
+                            <option value="frequency" ${s.inlineTriggerMode === 'frequency' ? 'selected' : ''}>Every X Replies</option>
                         </select>
                     </div>
                     <div style="flex: 1;">
@@ -376,6 +393,18 @@ export function renderImageGen(c) {
         if (s.triggerMode === 'frequency') $("#ig_freq_container").show(); else $("#ig_freq_container").hide();
     });
     $("#ig_auto_freq").on("input", (e) => { let v = parseInt($(e.target).val()); if (v < 1) v = 1; s.autoGenFreq = v; saveProfileDebounced(); });
+    $("#ig_inline_writer").on("change", (e) => {
+        s.inlineWriter = $(e.target).val();
+        saveProfileToMemory();
+        if (s.inlineWriter === "side" && !confirm("Side model mode: the utility backend writes image prompts after each qualifying reply. Make sure 'Image Prompt (Inline Writer)' is pointed at a fast backend in Global Settings → Utility Backends, or nothing will generate. Continue?")) {
+            s.inlineWriter = "main";
+            $(e.target).val("main");
+            saveProfileToMemory();
+            return;
+        }
+        if (s.inlineWriter === "side") $("#ig_inline_trigger_container").show(); else $("#ig_inline_trigger_container").hide();
+    });
+    $("#ig_inline_trigger_mode").on("change", (e) => { s.inlineTriggerMode = $(e.target).val(); saveProfileToMemory(); });
 
     $("#ig_preview_card").on("click", function () {
         s.previewPrompt = !s.previewPrompt;
@@ -729,8 +758,31 @@ export async function generateImagePromptText() {
         npcTagsStr: npcTagsStr // <-- ADD TO REQUEST
     });
 
-    let rawOutput = await generateQuietPrompt({ prompt: "___PS_IMAGE_GEN___" });
-    return rawOutput.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+    // Per-task utility backend: a configured direct backend builds the prompt
+    // from the SAME payload and calls the endpoint itself, bypassing the
+    // interceptor; "main" goes through generateQuietPrompt as before. The
+    // marker is parked either way so identity/race guards behave identically.
+    let rawOutput;
+    if (meguminTaskBackend("imageGen")) {
+        const built = buildImageGenMessages({
+            chatText: lastMessages,
+            templateRules: rules,
+            templateExamples: examples,
+            extraStr: ig.promptExtra || "",
+            directLanguageStr: directLangStr,
+            npcTagsStr: npcTagsStr
+        });
+        const { text } = await runUtilityGeneration("imageGen", built.messages);
+        rawOutput = text;
+        setActiveImageGenRequest(null);
+    } else {
+        try {
+            rawOutput = await generateQuietPrompt({ prompt: "___PS_IMAGE_GEN___" });
+        } finally {
+            setActiveImageGenRequest(null);
+        }
+    }
+    return meguminStripThink(rawOutput);
 }
 
 // ── Inline Image Retry: DOM-based button injection ──

@@ -201,6 +201,38 @@ export const MEGUMIN_SLOT_REGISTRY = [
       gate: GATE.plan, hint: "Arc, chapter and secrets, printed for the Story Director.",
       fallback: () => "# at the very end of the response put this block:\n<Story_Tracker>\narc: The Arc that is now active.\nchapter: The chapter that is now active.\nEpisode: The episode that is now active.\nSecrets: Any secret that the user/{{user}} doesn't know.\n</Story_Tracker>" },
 
+    // ── zTracker port: 10 scene-tracking blocks ──────────────────────────────
+    { key: "scene_info", trigger: "[[sceneInfo]]", carrier: "blocks", label: "Scene Info", scope: "shared", group: "blocks",
+      gate: GATE.block("scene_info"), hint: "Scene header: time, location, weather, conversation topics.",
+      fallback: () => blockText("scene_info") },
+    { key: "roster", trigger: "[[roster]]", carrier: "blocks", label: "Roster", scope: "shared", group: "blocks",
+      gate: GATE.block("roster"), hint: "One line per character present.",
+      fallback: () => blockText("roster") },
+    { key: "checks", trigger: "[[checks]]", carrier: "blocks", label: "Checks", scope: "shared", group: "blocks",
+      gate: GATE.block("checks"), hint: "GM checks: DC, roll, delta, outcome tiers.",
+      fallback: () => blockText("checks") },
+    { key: "quests", trigger: "[[quests]]", carrier: "blocks", label: "Quests", scope: "shared", group: "blocks",
+      gate: GATE.block("quests"), hint: "Main and side objectives with step progress.",
+      fallback: () => blockText("quests") },
+    { key: "morale", trigger: "[[morale]]", carrier: "blocks", label: "Morale", scope: "shared", group: "blocks",
+      gate: GATE.block("morale"), hint: "Party resilience and shared secrets.",
+      fallback: () => blockText("morale") },
+    { key: "world_event", trigger: "[[worldEvent]]", carrier: "blocks", label: "World Event", scope: "shared", group: "blocks",
+      gate: GATE.block("world_event"), hint: "Environmental shifts and off-screen NPC actions.",
+      fallback: () => blockText("world_event") },
+    { key: "seeds", trigger: "[[seeds]]", carrier: "blocks", label: "Seeds", scope: "shared", group: "blocks",
+      gate: GATE.block("seeds"), hint: "Chekhov's gun: pending narrative debt.",
+      fallback: () => blockText("seeds") },
+    { key: "gm_notebook", trigger: "[[gmNotebook]]", carrier: "blocks", label: "GM Notebook", scope: "shared", group: "blocks",
+      gate: GATE.block("gm_notebook"), hint: "Persistent [R]/[T]/[D] GM memory.",
+      fallback: () => blockText("gm_notebook") },
+    { key: "char_state", trigger: "[[charState]]", carrier: "blocks", label: "Character State", scope: "shared", group: "blocks",
+      gate: GATE.block("char_state"), hint: "Per-character outfit, dress state and pose. Camera-only for {{user}}.",
+      fallback: () => blockText("char_state") },
+    { key: "npc_mind", trigger: "[[npcMind]]", carrier: "blocks", label: "NPC Mind", scope: "shared", group: "blocks",
+      gate: GATE.block("npc_mind"), hint: "Per-NPC monologue and agenda. NPCs only.",
+      fallback: () => blockText("npc_mind") },
+
     // ── Computed from your settings. Overridable, but rarely worth it ────────
     { key: "language", trigger: "[[Language]]", label: "Language Rule", scope: "auto", group: "global",
       overridable: true, where: "Global",
@@ -253,7 +285,9 @@ export function meguminAllSlotTriggers() {
     // Numbered twins: some presets emit a block a second time further down.
     ["[[infoblock2]]", "[[cyoa2]]", "[[storytracker2]]", "[[npc_inner_chatter2]]",
         "[[npc_dossier2]]", "[[img2]]", "[[dice_rolls]]", "[[npc_updates]]", "[[order]]",
-        "[[v9_lean_min]]", "[[v9_lean_max]]", "[[v9_full_min]]", "[[v9_full_max]]"]
+        "[[v9_lean_min]]", "[[v9_lean_max]]", "[[v9_full_min]]", "[[v9_full_max]]",
+        "[[sceneInfo2]]", "[[roster2]]", "[[checks2]]", "[[quests2]]", "[[morale2]]",
+        "[[worldEvent2]]", "[[seeds2]]", "[[gmNotebook2]]", "[[charState2]]", "[[npcMind2]]"]
         .forEach(t => out.add(t));
     // The bare-bracket spellings an older preset generation used.
     for (let i = 1; i <= 6; i++) out.add(`[prompt${i}]`);

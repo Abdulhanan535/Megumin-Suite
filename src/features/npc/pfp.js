@@ -14,6 +14,8 @@ import { saveProfileToMemory } from "../../core/profile.js";
 import { fireRefreshHook, REFRESH } from "../../core/refreshHooks.js";
 import { setActiveNpcPfpRequest } from "../../core/activeRequests.js";
 import { showKazumaProgress } from "../../ui/progress.js";
+import { runUtilityGeneration, meguminTaskBackend } from "../../engine/utility.js";
+import { buildNpcPortraitMessages } from "../../engine/taskPrompts.js";
 import { npcBuildTextFromData } from "./data.js";
 
 // Generate NPC portrait via ComfyUI — uses AI to generate the prompt from full NPC info
@@ -43,13 +45,23 @@ export async function npcGeneratePfp(npcName) {
     toastr.info(`Generating portrait prompt for ${npcName}...`, "NPC Bank");
     showKazumaProgress("AI is writing portrait prompt...");
 
-    // Step 1: Ask the AI to generate an image prompt from the NPC dossier
-    setActiveNpcPfpRequest({ npcText, styleStr, perspStr, extraStr: s.promptExtra || "None" });
-
     let promptText;
     try {
-        let rawOutput = await generateQuietPrompt({ prompt: "___PS_NPC_PFP___" });
-        promptText = rawOutput.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+        // Per-task utility backend: direct backend calls the endpoint itself;
+        // "main" parks the marker and uses the interceptor as before.
+        if (meguminTaskBackend("npcPortrait")) {
+            const built = buildNpcPortraitMessages({ npcText, styleStr, perspStr, extraStr: s.promptExtra || "None" });
+            promptText = (await runUtilityGeneration("npcPortrait", built.messages)).text;
+        } else {
+            setActiveNpcPfpRequest({ npcText, styleStr, perspStr, extraStr: s.promptExtra || "None" });
+            let rawOutput;
+            try {
+                rawOutput = await generateQuietPrompt({ prompt: "___PS_NPC_PFP___" });
+            } finally {
+                setActiveNpcPfpRequest(null);
+            }
+            promptText = rawOutput.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+        }
 
         // Try to extract <img prompt="..."> if the AI wrapped it
         const imgRegex = /<img[^>]*?prompt=(["']?)([\s\S]*?)(?:\1\s*\/?>|\1\s*>|\1\s+[a-zA-Z]+=| \/>|>|$)/i;
@@ -59,10 +71,7 @@ export async function npcGeneratePfp(npcName) {
         console.error("NPC PFP prompt generation failed:", e);
         $("#kazuma_progress_overlay").hide();
         toastr.error("Failed to generate portrait prompt.");
-        setActiveNpcPfpRequest(null);
         return null;
-    } finally {
-        setActiveNpcPfpRequest(null);
     }
 
     if (!promptText || promptText.length < 5) {

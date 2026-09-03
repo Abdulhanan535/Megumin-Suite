@@ -69,5 +69,113 @@ Tone is honest and unguarded, contrasting with whatever the character shows on t
 Example (single NPC – the father):
 "NPC NAME: What a disappointment of a son... I miss my wife. She'd know what to say to him. I never did."]
 </NPC_Inner_Chatter>`
+    },
+
+    // ── zTracker port: 10 scene-tracking blocks ──────────────────────────────
+    // Ported from the zTracker extension's SceneTracker schemas. Each item is
+    // its own pickable block; shared rules (incremental time, keyword topics,
+    // full block every turn) are baked into every template. Player agency:
+    // {{user}} is camera-only wherever internal state is asked for.
+    {
+      id: "scene_info",
+      label: "Scene Info",
+      trigger: "[[sceneInfo]]",
+      content: `<Scene_Info>
+time: [HH:MM:SS; MM/DD/YYYY (Day Name) — advance by seconds or minutes, no jumps unless the story states one]
+location: [Specific place, building, floor/room, city — do not reuse an example location]
+weather: [Conditions, temperature, hazards if any]
+topic: [1-2 word keyword] | [emotionalTone] | [interactionTheme]
+</Scene_Info>`
+    },
+    {
+      id: "roster",
+      label: "Roster",
+      trigger: "[[roster]]",
+      content: `<Roster>
+[Name] — [one line: who they are right now, what they are doing]
+[Repeat for every character present]
+</Roster>`
+    },
+    {
+      id: "checks",
+      label: "Checks",
+      trigger: "[[checks]]",
+      content: `<Checks>
+[Actor] attempts [Action] | DC: [Easy 1-5 / Moderate 6-10 / Hard 11-15 / Extreme 16-20 — locked BEFORE the roll] | Roll: [1-20 + modifiers] | Delta: [Roll - DC] | Outcome: [Crit Success ≥+8 / Success 0..+7 / Near Miss -1..-3 / Failure -4..-7 / Crit Fail ≤-8] — [one-line consequence]
+[One line per attempted action this turn; "None" if no check occurred. Impartial GM: never fudge to protect a character. Outcomes shape the prose; the story text never mentions DCs, rolls or raw mechanical terms.]
+</Checks>`
+    },
+    {
+      id: "quests",
+      label: "Quests",
+      trigger: "[[quests]]",
+      content: `<Quests>
+Main: [objective] (Step n/m — [what advanced this turn])
+Side: [objective] (Step n/m — [what advanced this turn])
+[Drop completed quests; add new ones as they emerge]
+</Quests>`
+    },
+    {
+      id: "morale",
+      label: "Morale",
+      trigger: "[[morale]]",
+      content: `<Morale>
+party: [High / Steady / Low / Critical — collective mental resilience]
+secrets: [Shared vulnerabilities or secrets unlocked between characters, one line each — omit the line if none]
+</Morale>`
+    },
+    {
+      id: "world_event",
+      label: "World Event",
+      trigger: "[[worldEvent]]",
+      content: `<World_Event>
+event: [Environmental shift, weather change, or event beyond the PC's view]
+offscreen: [What an established NPC is plausibly doing right now, where they are — only NPCs the story has established]
+</World_Event>`
+    },
+    {
+      id: "seeds",
+      label: "Seeds",
+      trigger: "[[seeds]]",
+      content: `<Seeds>
+[Pending narrative debt, survival hazard, or emotional callback — one line each: what it hints at, turns since planted]
+[Drop resolved seeds; keep 3-5 max]
+</Seeds>`
+    },
+    {
+      id: "gm_notebook",
+      label: "GM Notebook",
+      trigger: "[[gmNotebook]]",
+      content: `<GM_Notebook>
+[R] [Rules reminder — house rule or consequence standing]
+[T] [Story thread — arc or tension being kept warm]
+[D] [Debug flag — data worth remembering, e.g. a number or name]
+[Max 20 entries. Persistent memory: carry entries forward unchanged unless something resolves them]
+</GM_Notebook>`
+    },
+    {
+      id: "char_state",
+      label: "Character State",
+      trigger: "[[charState]]",
+      content: `<Character_State>
+[Character Name]:
+outfit: [Complete outfit — color, fabric, style. Underwear ALWAYS included; write "No bra" / "No panties" explicitly when missing. If undressed, list the entire outfit and where each discarded item is]
+state: [How put-together or disheveled they appear, including removed or torn clothing]
+pose: [Physical positioning, where in the space, what they are doing]
+hair: [Optional — style and condition]
+makeup: [Optional — or "None"]
+[Repeat per character present. STRICT PLAYER AGENCY: {{user}}'s entry carries ONLY what a camera would catch — never thoughts, agendas, or internal state]
+</Character_State>`
+    },
+    {
+      id: "npc_mind",
+      label: "NPC Mind",
+      trigger: "[[npcMind]]",
+      content: `<NPC_Mind>
+[NPC Name]:
+thoughts: ["First-person internal monologue reacting to the scene — unmasked by social pretense, honest and raw"]
+agenda: [Immediate underlying goal or tactic — e.g. "Defuse tension", "Gain leverage", "Hide vulnerability"]
+[Repeat per NPC. NPCs ONLY — {{user}} never appears in this block]
+</NPC_Mind>`
     }
 ];

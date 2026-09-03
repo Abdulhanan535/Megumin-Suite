@@ -5,23 +5,26 @@
 // that the injection handler recognises, clear the payload in a finally.
 // useMeguminEngine additionally swaps the OpenAI preset for the duration and puts
 // it back, so a background task can use a different preset than the roleplay.
+//
+// Since the utility backend system (engine/utility.js), each task first checks
+// its per-task backend: a configured direct backend bypasses the interceptor
+// entirely, calls the endpoint itself, and never touches the preset.
 // ──────────────────────────────────────────────────────────────────────────────
 
 import { generateQuietPrompt } from "../st.js";
 import { extensionName, TARGET_PRESET_NAME } from "../core/constants.js";
 import { setActiveBanListChat, setActiveGenerationOrder } from "../core/activeRequests.js";
+import { runUtilityGeneration, meguminStripThink } from "./utility.js";
+import { buildBanListMessages, meguminUtilityPrefillEnabled } from "./taskPrompts.js";
 
 export async function analyzeSlopDirectly(chatText) {
-    setActiveBanListChat(chatText);
-    try {
-        let rawOutput = await generateQuietPrompt({ prompt: "___PS_BANLIST___" });
-        return rawOutput.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
-    } catch (e) {
-        console.error(`[${extensionName}] Ban List Analysis Failed:`, e);
-        return null;
-    } finally {
-        setActiveBanListChat(null);
-    }
+    const built = buildBanListMessages(chatText);
+    const messages = meguminUtilityPrefillEnabled() && built.prefill
+        ? [...built.messages, { role: "assistant", content: built.prefill }]
+        : built.messages;
+
+    const { text } = await runUtilityGeneration("banList", messages, { quietPrompt: { prompt: "___PS_BANLIST___" } });
+    return meguminStripThink(text);
 }
 
 export async function analyzeSlopWithPreset(chatText) {

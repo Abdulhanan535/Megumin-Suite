@@ -141,6 +141,79 @@ export const MEGUMIN_BLOCK_REGISTRY = [
         visibility: "open", builtin: true, system: true,
         source: "[[storytracker]]",
         requires: p => Boolean(p.storyPlan && p.storyPlan.enabled)
+    },
+    // ── zTracker port: 10 scene-tracking blocks ──────────────────────────────
+    // User-arrangeable (no system flag), each with its own gate on the legacy
+    // per-tag block list so an upgrading profile keeps what it had.
+    {
+        id: "sceneInfo", tag: "Scene_Info", label: "Scene Info",
+        desc: "Scene header: time, location, weather and conversation topics with emotional tone.",
+        emoji: "🌐", icon: "fa-globe", color: "#7aa2f7",
+        visibility: "open", builtin: true,
+        source: "[[sceneInfo]]", legacyIds: ["scene_info"]
+    },
+    {
+        id: "roster", tag: "Roster", label: "Roster",
+        desc: "One line per character present: who they are right now and what they are doing.",
+        emoji: "📋", icon: "fa-users", color: "#38bdf8",
+        visibility: "open", builtin: true,
+        source: "[[roster]]", legacyIds: ["roster"]
+    },
+    {
+        id: "checks", tag: "Checks", label: "Checks",
+        desc: "Impartial GM checks: DC locked before the roll, delta, outcome tiers. Coexists with true-random Dice.",
+        emoji: "✅", icon: "fa-dungeon", color: "#22d3ee",
+        visibility: "open", builtin: true,
+        source: "[[checks]]", legacyIds: ["checks"]
+    },
+    {
+        id: "quests", tag: "Quests", label: "Quests",
+        desc: "Main and side objectives with step progress n/m.",
+        emoji: "📜", icon: "fa-scroll", color: "#fbbf24",
+        visibility: "open", builtin: true,
+        source: "[[quests]]", legacyIds: ["quests"]
+    },
+    {
+        id: "morale", tag: "Morale", label: "Morale",
+        desc: "Party resilience (High/Steady/Low/Critical) and secrets unlocked between characters.",
+        emoji: "🔥", icon: "fa-fire", color: "#f43f5e",
+        visibility: "open", builtin: true,
+        source: "[[morale]]", legacyIds: ["morale"]
+    },
+    {
+        id: "worldEvent", tag: "World_Event", label: "World Event",
+        desc: "Environmental shifts and what established NPCs are doing off-screen.",
+        emoji: "🌎", icon: "fa-earth-americas", color: "#10b981",
+        visibility: "open", builtin: true,
+        source: "[[worldEvent]]", legacyIds: ["world_event"]
+    },
+    {
+        id: "seeds", tag: "Seeds", label: "Seeds",
+        desc: "Chekhov's gun: pending narrative debt, survival hazards, emotional callbacks.",
+        emoji: "🔫", icon: "fa-seedling", color: "#a855f7",
+        visibility: "open", builtin: true,
+        source: "[[seeds]]", legacyIds: ["seeds"]
+    },
+    {
+        id: "gmNotebook", tag: "GM_Notebook", label: "GM Notebook",
+        desc: "Persistent GM memory: [R] rules, [T] story threads, [D] debug flags, max 20 entries.",
+        emoji: "📓", icon: "fa-book", color: "#6b7280",
+        visibility: "open", builtin: true,
+        source: "[[gmNotebook]]", legacyIds: ["gm_notebook"]
+    },
+    {
+        id: "charState", tag: "Character_State", label: "Character State",
+        desc: "Per-character outfit (underwear rules), state of dress, pose, optional hair and makeup. Camera-only for {{user}}.",
+        emoji: "👤", icon: "fa-user-large", color: "#bb9af7",
+        visibility: "open", builtin: true,
+        source: "[[charState]]", legacyIds: ["char_state"]
+    },
+    {
+        id: "npcMind", tag: "NPC_Mind", label: "NPC Mind",
+        desc: "Per-NPC internal monologue and immediate agenda. NPCs only — {{user}} never appears.",
+        emoji: "🎯", icon: "fa-brain", color: "#a855f7",
+        visibility: "open", builtin: true,
+        source: "[[npcMind]]", legacyIds: ["npc_mind"]
     }
 ];
 

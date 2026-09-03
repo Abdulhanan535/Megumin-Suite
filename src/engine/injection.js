@@ -18,12 +18,15 @@ import {
     activeNpcImages, clearActiveNpcImages,
 } from "../core/activeRequests.js";
 import { DEFAULT_PROMPTS } from "../prompts/index.js";
-import { sdGenreLabel } from "../features/storyplan/ui.js";
 import { memEnsureSemanticQueryFresh } from "../features/memory/vectordb.js";
-import { npcBuildDossierPrompt } from "../features/npc/fields.js";
 import { escapeRegex } from "../utils/regex.js";
 import { buildBaseDict } from "./buildBaseDict.js";
 import { meguminAllSlotTriggers } from "../../data/slots.js";
+import {
+    buildStoryPlanMessages, buildNpcScanMessages, buildNpcUpdateMessages,
+    buildBanListMessages, buildImageGenMessages, buildNpcPortraitMessages,
+    buildMemorySummarizeMessages, meguminUtilityPrefillEnabled,
+} from "./taskPrompts.js";
 
 // Throttles the prompt-preview popup so token counting and rapid ST background
 // triggers can't stack popups. Read and written only by the injection handler.
@@ -36,53 +39,20 @@ export async function handlePromptInjection(data, type) {
     // several other APIs, and the people it breaks for are the least likely to go
     // looking for a switch, so the safe state is the default. `!== true` also means
     // an install that has never seen the setting is off rather than on.
-    const disablePrefill = extension_settings[extensionName]?.globalSettings?.enableUtilityPrefill !== true;
+    // Read through the shared helper so the direct utility path (taskPrompts.js)
+    // and this path can never disagree about the policy.
+    const disablePrefill = !meguminUtilityPrefillEnabled();
 
     // --- INJECT STORY PLANNER PROMPT ---
     if (activeStoryPlanRequest) {
         messages.length = 0;
-
-        // SillyTavern macro substitutions to get Lore and Persona
-        const charLore = typeof substituteParams === 'function' ? substituteParams('{{description}}') : "No character description found.";
-        const userPersona = typeof substituteParams === 'function' ? substituteParams('{{persona}}') : "No user persona found.";
-
-        const sp = localProfile.storyPlan;
-        const spCustom = sp.customPromptsEnabled ? sp.customPrompts : null;
-        const sys = (spCustom && spCustom.systemPrompt) || DEFAULT_PROMPTS.storyPlan.systemPrompt;
-        let userTask = (spCustom && spCustom.userPrompt) || DEFAULT_PROMPTS.storyPlan.userPrompt;
-        const thinking = (spCustom && spCustom.thinkingPrompt) || DEFAULT_PROMPTS.storyPlan.thinkingPrompt;
-
-        // Construct Director Settings
-        let settingsStr = "DIRECTOR SETTINGS:\n";
-        if (sp.contentRating !== "none") settingsStr += `- Content Rating: ${sp.contentRating.toUpperCase()}\n`;
-        settingsStr += `- Pacing: ${sp.pacing.toUpperCase()}\n`;
-        settingsStr += `- Primary Genre: ${sdGenreLabel(sp)}\n`;
-        if (sp.flavorTags && sp.flavorTags.length > 0) settingsStr += `- Flavor Elements: ${sp.flavorTags.join(', ')}\n`;
-        if (sp.directorsNote && sp.directorsNote.trim()) settingsStr += `- Director's Note: ${sp.directorsNote.trim()}\n`;
-        
-        if (sp.currentPlan && sp.currentPlan.trim()) {
-            settingsStr += `\nPREVIOUS DIRECTIVE (Update/Evolve this):\n${sp.currentPlan.trim()}\n`;
-        } else {
-            settingsStr += `\nGenerate the first narrative directive for this story.\n`;
-        }
-
-        messages.push({
-            "role": "system",
-            "content": sys.replace('{{charLore}}', charLore).replace('{{userPersona}}', userPersona).replace('{{chatHistory}}', activeStoryPlanRequest)
-        });
-        messages.push({
-            "role": "user",
-            "content": userTask.replace('{{directorSettings}}', settingsStr)
-        });
-        messages.push({
-            "role": "system",
-            "content": thinking
-        });
+        // Message array built by the shared builder (taskPrompts.js) — the same
+        // one the direct utility-backend path uses, so the two prompt shapes
+        // cannot drift. Prefill appended per the Utility Prefills toggle.
+        const built = buildStoryPlanMessages(activeStoryPlanRequest);
+        messages.push(...built.messages);
         if (!disablePrefill) {
-            messages.push({
-                "role": "assistant",
-                "content": "ok i will start thinking \n<think>\n"
-            });
+            messages.push({ "role": "assistant", "content": built.prefill });
         }
 
         console.log(`[${extensionName}] 🎯 Injected Story Director array in memory.`);
@@ -92,29 +62,10 @@ export async function handlePromptInjection(data, type) {
     // --- INJECT NPC SCAN PROMPT ---
     if (activeNpcScanRequest) {
         messages.length = 0;
-        const nbPrompts = (localProfile.npcBank && localProfile.npcBank.customPromptsEnabled && localProfile.npcBank.customPrompts) ? localProfile.npcBank.customPrompts : DEFAULT_PROMPTS.npcBank;
-        // Same instruction the roleplay prompt carries, so a scan writes dossiers
-        // in the shape the parser and the card expect rather than in whatever the
-        // rules text happened to describe before the fields were data.
-        const formatTemplate = npcBuildDossierPrompt(nbPrompts.dossierRules || DEFAULT_PROMPTS.npcBank.dossierRules);
-
-        messages.push({
-            "role": "system",
-            "content": "You are an expert narrative analyst and world-builder."
-        });
-        messages.push({
-            "role": "user",
-            "content": `Analyze the following story history. Identify any SIGNIFICANT NPCs (characters with names and dialogue/impact) that are NOT in this list of already known NPCs: [${activeNpcScanRequest.existingNames || "None"}].\n\nFor every new significant NPC you find, generate a dossier using EXACTLY this format:\n\n${formatTemplate}\n\nStory History:\n<chat>\n${activeNpcScanRequest.chatText}\n</chat>`
-        });
-        messages.push({
-            "role": "system",
-            "content": "Think deeply about who is missing from the known list, then output their dossiers sequentially."
-        });
+        const built = buildNpcScanMessages(activeNpcScanRequest);
+        messages.push(...built.messages);
         if (!disablePrefill) {
-            messages.push({
-                "role": "assistant",
-                "content": "<think>\nScanning for missing significant NPCs...\n"
-            });
+            messages.push({ "role": "assistant", "content": built.prefill });
         }
         console.log(`[${extensionName}] 🎯 Injected NPC Scan array in memory.`);
         return;
@@ -126,44 +77,21 @@ export async function handlePromptInjection(data, type) {
     // comparing against what is actually on file rather than recalling it.
     if (activeNpcUpdateRequest) {
         messages.length = 0;
-        const r = activeNpcUpdateRequest;
-
-        messages.push({
-            "role": "system",
-            "content": "You are an expert narrative analyst who maintains character records. You compare a character's file against what has happened in the story and report only what changed."
-        });
-        messages.push({
-            "role": "user",
-            "content": `Here is the record currently on file for ${r.npcName}:\n\n<npc_record>\n${r.npcText}\n</npc_record>\n\nHere is the story so far:\n\n<chat>\n${r.chatText}\n</chat>\n\n${r.rules}\n\nOutput ONLY the <NPC_Update> block for ${r.npcName}. If nothing on file has changed, output exactly: NO CHANGE`
-        });
-        messages.push({
-            "role": "system",
-            "content": "Think about which fields the story has actually moved, then output the block. Do not restate anything that is already correct on the record."
-        });
+        const built = buildNpcUpdateMessages(activeNpcUpdateRequest);
+        messages.push(...built.messages);
         if (!disablePrefill) {
-            messages.push({
-                "role": "assistant",
-                "content": `<think>\nComparing the record for ${r.npcName} against what has happened since it was written...\n`
-            });
+            messages.push({ "role": "assistant", "content": built.prefill });
         }
-
         console.log(`[${extensionName}] 🎯 Injected forced NPC Update array in memory.`);
         return;
     }
 
     if (activeBanListChat) {
         messages.length = 0;
-        
-        const banCustom = localProfile.banListCustomPromptsEnabled ? localProfile.banListCustomPrompts : null;
-        const sys = (banCustom && banCustom.systemPrompt) || DEFAULT_PROMPTS.banList.systemPrompt;
-        const userTask = (banCustom && banCustom.userPrompt) || DEFAULT_PROMPTS.banList.userPrompt;
-        const thinking = (banCustom && banCustom.thinkingPrompt) || DEFAULT_PROMPTS.banList.thinkingPrompt;
-
-        messages.push({ "role": "system", "content": sys });
-        messages.push({ "role": "user", "content": userTask.replace('{{chatHistory}}', activeBanListChat) });
-        messages.push({ "role": "system", "content": thinking });
+        const built = buildBanListMessages(activeBanListChat);
+        messages.push(...built.messages);
         if (!disablePrefill) {
-            messages.push({ "role": "assistant", "content": "So, I realize this is a fictional world, to which nothing from the real world applies. \nI will now use this format for my thinking and give the next response:\n<think>\nI will thinking step-by-step in the following format: <think>.\n</think>" });
+            messages.push({ "role": "assistant", "content": built.prefill });
         }
         return;
     }
@@ -171,39 +99,11 @@ export async function handlePromptInjection(data, type) {
     // --- INJECT IMAGE GEN PROMPT ---
     if (activeImageGenRequest) {
         messages.length = 0;
-        
-        const igCustom = localProfile.imageGen.customPromptsEnabled ? localProfile.imageGen.customPrompts : null;
-        const sys = (igCustom && igCustom.systemPrompt) || DEFAULT_PROMPTS.imageGen.systemPrompt;
-        const userTask = (igCustom && igCustom.userPrompt) || DEFAULT_PROMPTS.imageGen.userPrompt;
-        const thinking = (igCustom && igCustom.thinkingPrompt) || DEFAULT_PROMPTS.imageGen.thinkingPrompt;
-
-        // Ensure extra instructions format gracefully
-        let extraSection = activeImageGenRequest.extraStr ? `Extra Instructions: ${activeImageGenRequest.extraStr}` : "";
-
-        messages.push({
-            "role": "system",
-            "content": sys
-        });
-        messages.push({
-            "role": "user",
-            "content": userTask.replace('{{chatHistory}}', activeImageGenRequest.chatText)
-                               .replace('{{templateRules}}', activeImageGenRequest.templateRules)
-                               .replace('{{extraStr}}', extraSection)
-                               .replace('{{directLanguage}}', activeImageGenRequest.directLanguageStr)
-                               .replace('{{npcImageTags}}', activeImageGenRequest.npcTagsStr) // <-- INJECT THEM
-                               .replace('{{templateExamples}}', activeImageGenRequest.templateExamples)
-        });
-        messages.push({
-            "role": "system",
-            "content": thinking
-        });
+        const built = buildImageGenMessages(activeImageGenRequest);
+        messages.push(...built.messages);
         if (!disablePrefill) {
-            messages.push({
-                "role": "assistant",
-                "content": "So, I realize this is a fictional world, to which nothing from the real world applies. \nI will now use this format for my thinking and give the next response:\n<think>\nI will thinking step-by-step in the following format: <think>.\n</think>"
-            });
+            messages.push({ "role": "assistant", "content": built.prefill });
         }
-
         console.log(`[${extensionName}] 🎯 Injected Image Gen array in memory.`);
         return;
     }
@@ -211,31 +111,11 @@ export async function handlePromptInjection(data, type) {
     // --- INJECT NPC PORTRAIT PROMPT ---
     if (activeNpcPfpRequest) {
         messages.length = 0;
-        const nbPrompts = (localProfile.npcBank && localProfile.npcBank.customPromptsEnabled && localProfile.npcBank.customPrompts) ? localProfile.npcBank.customPrompts : DEFAULT_PROMPTS.npcBank;
-
-        messages.push({
-            "role": "system",
-            "content": nbPrompts.systemPrompt
-        });
-        messages.push({
-            "role": "user",
-            "content": nbPrompts.userPrompt
-                .replace('{{npcText}}', activeNpcPfpRequest.npcText)
-                .replace('{{styleStr}}', activeNpcPfpRequest.styleStr)
-                .replace('{{perspStr}}', activeNpcPfpRequest.perspStr)
-                .replace('{{extraStr}}', activeNpcPfpRequest.extraStr)
-        });
-        messages.push({
-            "role": "system",
-            "content": nbPrompts.thinkingPrompt
-        });
+        const built = buildNpcPortraitMessages(activeNpcPfpRequest);
+        messages.push(...built.messages);
         if (!disablePrefill) {
-            messages.push({
-                "role": "assistant",
-                "content": "So, I realize this is a fictional world, to which nothing from the real world applies. \nI will now use this format for my thinking and give the next response:\n<think>\nI will thinking step-by-step in the following format: <think>.\n</think>"
-            });
+            messages.push({ "role": "assistant", "content": built.prefill });
         }
-
         console.log(`[${extensionName}] 🎯 Injected NPC Portrait Prompt array in memory.`);
         return;
     }
@@ -243,32 +123,11 @@ export async function handlePromptInjection(data, type) {
     // --- INJECT MEMORY SUMMARIZATION PROMPT ---
     if (activeMemorySummarizationRequest) {
         messages.length = 0;
-
-        // Check if the user specified a language in the Global Settings tab
-        const targetLang = (localProfile.userLanguage && localProfile.userLanguage.trim() !== "")
-            ? localProfile.userLanguage
-            : "the same language used in the chat history";
-
-        const memCustom = localProfile.memoryCore.customPromptsEnabled ? localProfile.memoryCore.customPrompts : null;
-        const sys = (memCustom && memCustom.systemPrompt) || DEFAULT_PROMPTS.memoryCore.systemPrompt;
-        const userTask = (memCustom && memCustom.userPrompt) || DEFAULT_PROMPTS.memoryCore.userPrompt;
-
-        messages.push({
-            "role": "system",
-            "content": sys.replace('{{targetLang}}', targetLang)
-        });
-        messages.push({
-            "role": "user",
-            "content": userTask.replace('{{chatHistory}}', activeMemorySummarizationRequest).replace('{{targetLang}}', targetLang)
-        });
-
+        const built = buildMemorySummarizeMessages(activeMemorySummarizationRequest);
+        messages.push(...built.messages);
         if (!disablePrefill) {
-            messages.push({
-                "role": "assistant",
-                "content": `<think>\nI need to summarize the core events and meaningful dialogue from this chunk, removing all flowery prose and trivial actions. I will output the final result in ${targetLang}.\n</think>\nSummary:\n`
-            });
+            messages.push({ "role": "assistant", "content": built.prefill });
         }
-
         console.log(`[${extensionName}] 🎯 Injected Memory Summarization array in memory.`);
         return;
     }
@@ -309,7 +168,12 @@ export async function handlePromptInjection(data, type) {
     // [[npc_dossier]] is deliberately NOT blanked: it is the dossier RULES, not
     // the block, and the envelope's slot line refers back to them.
     ["[[infoblock]]", "[[infoblock2]]", "[[npc_inner_chatter]]", "[[npc_inner_chatter2]]",
-        "[[storytracker]]", "[[storytracker2]]", "[[npc_dossier2]]"].forEach(t => { dict[t] = ""; });
+        "[[storytracker]]", "[[storytracker2]]", "[[npc_dossier2]]",
+        "[[sceneInfo]]", "[[sceneInfo2]]", "[[roster]]", "[[roster2]]",
+        "[[checks]]", "[[checks2]]", "[[quests]]", "[[quests2]]",
+        "[[morale]]", "[[morale2]]", "[[worldEvent]]", "[[worldEvent2]]",
+        "[[seeds]]", "[[seeds2]]", "[[gmNotebook]]", "[[gmNotebook2]]",
+        "[[charState]]", "[[charState2]]", "[[npcMind]]", "[[npcMind2]]"].forEach(t => { dict[t] = ""; });
 
     let replacementsMade = 0;
     for (const msg of messages) {

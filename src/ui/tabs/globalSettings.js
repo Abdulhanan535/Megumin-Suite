@@ -2,12 +2,18 @@
 // Global Settings — extension preferences, community links and about.
 // ────────────────────────────────────────────────────────────────────────────
 
-import { extension_settings, saveSettingsDebounced } from "../../st.js";
+import { extension_settings, saveSettingsDebounced, Popup, POPUP_TYPE } from "../../st.js";
 import { extensionName } from "../../core/constants.js";
 import { localProfile } from "../../core/state.js";
 import { initProfile, saveProfileToMemory } from "../../core/profile.js";
 import { flushProfileSettingsToLoadedKey, _saveProfileDebouncedInner } from "../../core/profile.js";
 import { cancelDebounce } from "../../st.js";
+import { escapeHtmlAttr } from "../../utils/html.js";
+import {
+    UTILITY_TASKS_ACTIVE, meguminUtilityBackends, meguminUtilityTaskMap,
+    meguminAddUtilityBackend, meguminUpdateUtilityBackend, meguminDeleteUtilityBackend,
+    meguminSetTaskBackend,
+} from "../../engine/utility.js";
 
 // The version on the about card. One place, so it cannot fall out of step with
 // itself the way "v9" did once V10 shipped.
@@ -149,6 +155,133 @@ export function renderGlobalSettings(c) {
             </div>
         </div>
     `);
+
+    // ── UTILITY BACKENDS ────────────────────────────────────────────────────
+    // Direct API endpoints background tasks can use instead of the main
+    // connection. Global on purpose: API keys must never ride tab sync or
+    // chat-level profiles. Each of the suite's background tasks picks its own
+    // backend below — "Main API" is the default and changes nothing.
+    const backends = meguminUtilityBackends();
+    const taskMap = meguminUtilityTaskMap();
+
+    $content.append(`<div class="wstyle-section-head gold" style="margin-top:8px;"><i class="fa-solid fa-bolt"></i> Utility Backends</div>`);
+    $content.append(`
+        <div class="mtab-callout" style="margin-bottom:10px;">
+            <i class="fa-solid fa-circle-info"></i>
+            <span>Fast/cheap OpenAI-compatible endpoints for <b>background work</b> (memory, NPC bank, Story Director, Ban List, image prompts). The main roleplay connection is never touched. Any OpenAI-compatible URL works — OpenRouter, a local LLM server, etc.</span>
+        </div>
+    `);
+
+    const $backendList = $(`<div style="display:flex; flex-direction:column; gap:8px; margin-bottom:10px;" id="gs_ub_list"></div>`);
+    const renderBackendRow = (b) => `
+        <div class="mtab-panel" style="margin:0; padding:10px 14px;" data-ubid="${b.id}">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px;">
+                <div style="font-weight:700; font-size:0.85rem; color:var(--text-main);"><i class="fa-solid fa-server" style="color:var(--gold); margin-right:6px;"></i>${escapeHtmlAttr(b.name)}</div>
+                <div style="display:flex; gap:6px;">
+                    <button class="ps-modern-btn secondary gs_ub_edit" data-ubid="${b.id}" style="padding:4px 10px; font-size:0.7rem;"><i class="fa-solid fa-pen"></i></button>
+                    <button class="ps-modern-btn secondary gs_ub_del" data-ubid="${b.id}" style="padding:4px 10px; font-size:0.7rem; color:#ef4444; border-color:rgba(239,68,68,0.3);"><i class="fa-solid fa-trash"></i></button>
+                </div>
+            </div>
+            <div style="font-size:0.72rem; color:var(--text-muted); word-break:break-all;">
+                <i class="fa-solid fa-link" style="opacity:0.6;"></i> ${escapeHtmlAttr(b.endpointUrl || "no url")}<br>
+                <i class="fa-solid fa-microchip" style="opacity:0.6;"></i> ${escapeHtmlAttr(b.model || "no model")} · temp ${b.temperature} · max ${b.maxTokens}
+            </div>
+        </div>`;
+    const redrawBackendList = () => {
+        $backendList.empty();
+        const list = meguminUtilityBackends();
+        if (!list.length) {
+            $backendList.append(`<div style="font-size:0.75rem; color:var(--text-muted); font-style:italic;">No backends configured — every task runs on the Main API.</div>`);
+        } else {
+            list.forEach(b => $backendList.append(renderBackendRow(b)));
+        }
+        redrawTaskPickers();
+    };
+
+    // The per-task backend pickers. One select per task; "main" = current behavior.
+    const $taskPickers = $(`<div style="display:flex; flex-direction:column; gap:6px; margin-bottom:10px;" id="gs_ub_tasks"></div>`);
+    const redrawTaskPickers = () => {
+        $taskPickers.empty();
+        const list = meguminUtilityBackends();
+        UTILITY_TASKS_ACTIVE.forEach(t => {
+            const current = meguminUtilityTaskMap()[t.id] || "main";
+            const options = [`<option value="main" ${current === "main" ? "selected" : ""}>Main API (default)</option>`]
+                .concat(list.map(b => `<option value="${b.id}" ${current === b.id ? "selected" : ""}>${escapeHtmlAttr(b.name)}</option>`));
+            $taskPickers.append(`
+                <div class="mtab-setting-row" style="padding:8px 0; border-bottom:1px solid rgba(255,255,255,0.04);">
+                    <div class="set-info"><div class="set-label" style="font-size:0.78rem;">${t.label}</div></div>
+                    <select class="ps-modern-input gs_ub_task" data-task="${t.id}" style="width:170px; padding:6px 10px; font-size:0.75rem; cursor:pointer;">${options.join("")}</select>
+                </div>`);
+        });
+    };
+
+    $content.append($backendList);
+    $content.append(`
+        <div class="mtab-btn-row" style="margin-bottom:12px;">
+            <button id="gs_ub_add" class="ps-modern-btn secondary" style="font-size:0.72rem;"><i class="fa-solid fa-plus"></i> Add Backend</button>
+        </div>
+    `);
+    $content.append(`<div class="ps-rule-title" style="margin:4px 0 8px;">Which task uses which backend</div>`);
+    $content.append($taskPickers);
+
+    const backendEditorPopup = (existing) => new Promise(resolve => {
+        const isEdit = Boolean(existing);
+        const $popup = $(`
+            <div style="display:flex; flex-direction:column; gap:10px; font-family:'Inter',sans-serif; text-align:left;">
+                <label style="font-size:0.75rem; font-weight:700;">Name<br><input id="ub_name" class="ps-modern-input" value="${isEdit ? escapeHtmlAttr(existing.name) : ""}" placeholder="e.g. Fast 80t/s"></label>
+                <label style="font-size:0.75rem; font-weight:700;">Endpoint URL (OpenAI-compatible, no /v1 needed)<br><input id="ub_url" class="ps-modern-input" value="${isEdit ? escapeHtmlAttr(existing.endpointUrl) : ""}" placeholder="https://openrouter.ai/api/v1"></label>
+                <label style="font-size:0.75rem; font-weight:700;">API Key<br><input id="ub_key" class="ps-modern-input" type="password" value="${isEdit ? escapeHtmlAttr(existing.apiKey) : ""}" placeholder="sk-..."></label>
+                <label style="font-size:0.75rem; font-weight:700;">Model<br><input id="ub_model" class="ps-modern-input" value="${isEdit ? escapeHtmlAttr(existing.model) : ""}" placeholder="e.g. meta-llama/llama-3.1-8b-instruct"></label>
+                <div style="display:flex; gap:10px;">
+                    <label style="flex:1; font-size:0.75rem; font-weight:700;">Temperature<br><input id="ub_temp" class="ps-modern-input" type="number" step="0.1" min="0" max="2" value="${isEdit ? existing.temperature : 0.8}"></label>
+                    <label style="flex:1; font-size:0.75rem; font-weight:700;">Max Tokens<br><input id="ub_maxtok" class="ps-modern-input" type="number" step="128" min="64" max="32768" value="${isEdit ? existing.maxTokens : 1024}"></label>
+                </div>
+                <div style="font-size:0.7rem; color:var(--text-muted);">Stored globally in this browser's SillyTavern settings. Never synced, never exported with profiles.</div>
+            </div>`);
+        const popup = new Popup($popup, POPUP_TYPE.CONFIRM, isEdit ? "Edit Utility Backend" : "Add Utility Backend", { okButton: "Save", cancelButton: "Cancel", wide: true });
+        popup.show().then(confirmed => {
+            if (!confirmed) return resolve(null);
+            resolve({
+                name: $popup.find("#ub_name").val(),
+                endpointUrl: $popup.find("#ub_url").val(),
+                apiKey: $popup.find("#ub_key").val(),
+                model: $popup.find("#ub_model").val(),
+                temperature: $popup.find("#ub_temp").val(),
+                maxTokens: $popup.find("#ub_maxtok").val(),
+            });
+        });
+    });
+
+    $content.find("#gs_ub_add").on("click", async () => {
+        const data = await backendEditorPopup(null);
+        if (!data) return;
+        meguminAddUtilityBackend(data);
+        redrawBackendList();
+        toastr.success("Utility backend added.");
+    });
+    $content.on("click", ".gs_ub_edit", async function () {
+        const id = $(this).attr("data-ubid");
+        const b = meguminUtilityBackends().find(x => x.id === id);
+        if (!b) return;
+        const data = await backendEditorPopup(b);
+        if (!data) return;
+        meguminUpdateUtilityBackend(id, data);
+        redrawBackendList();
+    });
+    $content.on("click", ".gs_ub_del", function () {
+        const id = $(this).attr("data-ubid");
+        const b = meguminUtilityBackends().find(x => x.id === id);
+        if (!b) return;
+        if (!confirm(`Delete backend "${b.name}"? Tasks using it fall back to the Main API.`)) return;
+        meguminDeleteUtilityBackend(id);
+        redrawBackendList();
+        toastr.info("Backend deleted.");
+    });
+    $content.on("change", ".gs_ub_task", function () {
+        meguminSetTaskBackend($(this).attr("data-task"), $(this).val());
+    });
+
+    redrawBackendList();
 
     // ── WIRING ──────────────────────────────────────────────────────────────
     //

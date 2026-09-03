@@ -204,6 +204,11 @@ export function initProfile() {
             promptExtra: "",
             triggerMode: "always",
             autoGenFreq: 1,
+            // Side-model inline images ("Inline Prompt Writer"): "main" keeps the
+            // current behavior (the reply carries the tag), "side" hands prompt
+            // writing to the utility backend on each qualifying reply.
+            inlineWriter: "main",
+            inlineTriggerMode: "always",
             previewPrompt: false,
             savedWorkflowStates: {},
             customPrompts: null,
@@ -238,6 +243,14 @@ export function initProfile() {
             scanDepth: 60,
             ignoredNames: "",
             injectionLimit: 3
+        },
+        // Dynamic Characters (cast generator): guidance/temperature/maxTokens
+        // for the one-shot Start Scene cast call. The backend choice is task
+        // type "castGenerator" in the Global Settings picker, not per-profile.
+        castGen: {
+            guidance: "",
+            temperature: 0.8,
+            maxTokens: 2048
         }
     };
 
@@ -367,6 +380,8 @@ export function initProfile() {
     if (localProfile.npcBank && localProfile.npcBank.scanDepth === undefined) localProfile.npcBank.scanDepth = 60;
     if (localProfile.banListCustomPromptsEnabled === undefined) localProfile.banListCustomPromptsEnabled = false;
     if (localProfile.imageGen.injectNpcTags === undefined) localProfile.imageGen.injectNpcTags = false;
+    if (localProfile.imageGen.inlineWriter === undefined) localProfile.imageGen.inlineWriter = "main";
+    if (localProfile.imageGen.inlineTriggerMode === undefined) localProfile.imageGen.inlineTriggerMode = "always";
     // Story Config (replaces the old standalone POV dropdown and the legacy word count)
     if (!localProfile.storyConfig) localProfile.storyConfig = JSON.parse(JSON.stringify(defaults.storyConfig));
     Object.keys(defaults.storyConfig).forEach(k => {

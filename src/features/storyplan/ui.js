@@ -12,6 +12,8 @@ import { saveProfileToMemory, saveProfileDebounced } from "../../core/profile.js
 import { DEFAULT_PROMPTS } from "../../prompts/index.js";
 import { renderPromptEditor } from "../../ui/promptEditor.js";
 import { cleanAIOutput, getChatForStoryDirector } from "../../engine/chatText.js";
+import { runUtilityGeneration, meguminTaskBackend } from "../../engine/utility.js";
+import { buildStoryPlanMessages } from "../../engine/taskPrompts.js";
 import { escapeHtmlAttr } from "../../utils/html.js";
 import { useMeguminEngine } from "../../engine/tasks.js";
 
@@ -481,6 +483,13 @@ export async function handleDirectiveGeneration(sp, btn, isEvolve) {
 }
 
 export async function generateStoryPlanLogic(chatText) {
+    // Per-task utility backend: a configured direct backend calls the endpoint
+    // itself; "main" parks the marker and goes through the interceptor as before.
+    if (meguminTaskBackend("storyPlan")) {
+        const built = buildStoryPlanMessages(chatText);
+        const { text } = await runUtilityGeneration("storyPlan", built.messages);
+        return text;
+    }
     setActiveStoryPlanRequest(chatText);
     try {
         let rawOutput = await generateQuietPrompt({ prompt: "___PS_STORY_PLAN___" });
