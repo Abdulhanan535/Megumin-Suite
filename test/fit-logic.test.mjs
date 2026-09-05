@@ -22,7 +22,7 @@ function makeTokenizer(counter) {
     };
 }
 
-function buildEnv({ budget, charToToken = 4 }) {
+function buildEnv({ budget, charToToken = 4, oaiSettings = null, apiFetch = null }) {
     const counter = { calls: 0 };
     let budgetValue = budget;
 
@@ -38,15 +38,17 @@ function buildEnv({ budget, charToToken = 4 }) {
         info: () => { }, log: () => { }, debug: () => { }, error: () => { },
         warn: (...a) => { warns.push(a.join(' ')); },
     };
+    const oai_settings = oaiSettings ?? { custom_url: null, reverse_proxy: null, azure_base_url: null };
+    const fetch = apiFetch ?? (async () => { throw new Error('network stub'); });
 
     // Compile the two functions with the env stubs in scope.
     const factory = new Function(
-        'getMaxPromptTokens', 'getTokenCountAsync', 'toastr', 'console',
+        'getMaxPromptTokens', 'getTokenCountAsync', 'oai_settings', 'fetch', 'toastr', 'console',
         fitSrc + `
         return { meguminFitToContext, meguminFitContentToText };
         `
     );
-    const { meguminFitToContext } = factory(getMaxPromptTokens, getTokenCountAsync, toastr, consoleMock);
+    const { meguminFitToContext } = factory(getMaxPromptTokens, getTokenCountAsync, oai_settings, fetch, toastr, consoleMock);
     return { meguminFitToContext, counter, toasts, warns };
 }
 
@@ -143,6 +145,53 @@ console.log('Case 6: CJK-heavy prompt (1 char ~ 1 token) is NOT let through by t
     await meguminFitToContext(messages, false);
     check('tokenizer actually consulted', counter.calls >= 1, `calls=${counter.calls}`);
     check('trimmed the CJK overload', messages.length < before, `before=${before} after=${messages.length}`);
+}
+
+// ---------------------------------------------------------------------------
+console.log('Case 7: API /tokenize path (when available) — exact count, client counter untouched');
+{
+    const fetchCalls = [];
+    const apiFetch = async (url, opts) => {
+        fetchCalls.push(url);
+        const body = JSON.parse(opts.body);
+        // The "model's" real tokenizer is denser than the client's 4 chars/token: 3 chars/token.
+        return {
+            ok: true,
+            status: 200,
+            json: async () => ({ tokens: new Array(Math.max(1, Math.ceil(body.content.length / 3))).fill(0) }),
+        };
+    };
+    const { meguminFitToContext, counter, toasts } = buildEnv({
+        budget: 4000,
+        oaiSettings: { custom_url: 'https://api.example.com/v1', reverse_proxy: null, azure_base_url: null },
+        apiFetch,
+    });
+    const messages = [sys(8000)];
+    for (let i = 0; i < 10; i++) messages.push(i % 2 === 0 ? usr(800) : asst(800));
+    const before = messages.length;
+    const lastUser = messages.filter(m => m.role === 'user').pop();
+    await meguminFitToContext(messages, false);
+    check('used the API base with /tokenize', fetchCalls[0] === 'https://api.example.com/tokenize', `urls=${JSON.stringify(fetchCalls)}`);
+    check('client tokenizer never called', counter.calls === 0, `calls=${counter.calls}`);
+    check('trimmed to the exact budget', messages.length < before && messages.indexOf(lastUser) >= 0,
+        `before=${before} after=${messages.length}`);
+    check('toast shown', toasts.length >= 1, `toasts=${JSON.stringify(toasts)}`);
+}
+
+// ---------------------------------------------------------------------------
+console.log('Case 8: API /tokenize unavailable -> falls back to the client counter with the wide margin');
+{
+    const { meguminFitToContext, counter } = buildEnv({
+        budget: 4000,
+        oaiSettings: { custom_url: 'https://api.example.com/v1', reverse_proxy: null, azure_base_url: null },
+        apiFetch: async () => { throw new TypeError('fetch failed'); },
+    });
+    const messages = [sys(8000)];
+    for (let i = 0; i < 10; i++) messages.push(i % 2 === 0 ? usr(800) : asst(800));
+    const before = messages.length;
+    await meguminFitToContext(messages, false);
+    check('client tokenizer consulted (fallback)', counter.calls >= 1, `calls=${counter.calls}`);
+    check('still trims', messages.length < before, `before=${before} after=${messages.length}`);
 }
 
 console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} TEST(S) FAILED`);

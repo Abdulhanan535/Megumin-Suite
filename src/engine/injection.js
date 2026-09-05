@@ -6,7 +6,7 @@
 // NPC scan, memory summary). Everything it needs is already a module.
 // ────────────────────────────────────────────────────────────────────────────
 
-import { extension_settings, substituteParams, Popup, POPUP_TYPE, getMaxPromptTokens, getTokenCountAsync } from "../st.js";
+import { extension_settings, substituteParams, Popup, POPUP_TYPE, getMaxPromptTokens, getTokenCountAsync, oai_settings } from "../st.js";
 import { getContext } from "../st.js";
 import { extensionName } from "../core/constants.js";
 import { localProfile } from "../core/state.js";
@@ -52,7 +52,9 @@ let _lastFitToast = 0;
 
 // Flat per-role overhead the chat-completion format adds around every message,
 // and a fixed stand-in cost for image parts, which the text tokenizer cannot see.
-const FIT_ROLE_OVERHEAD = 4;
+// 12 covers the chat-template tokens per message on typical templates (Gemma's
+// <start_of_turn>/<end_of_turn> framing is ~8-12 tokens per message).
+const FIT_ROLE_OVERHEAD = 12;
 const FIT_IMAGE_STANDIN_CHARS = 400;
 
 function meguminFitContentToText(content) {
@@ -68,6 +70,56 @@ function meguminFitContentToText(content) {
     return "";
 }
 
+// Self-hosted OpenAI-compatible servers (llama.cpp, vLLM) expose a /tokenize
+// endpoint that counts with the model's REAL tokenizer. ST's own counter uses a
+// different tokenizer (e.g. cl100k for a Gemma model), which is the ~9% gap this
+// patch exists to close. The base URL is derived from the same fields ST's own
+// backend uses to reach the provider, so this works no matter which source is
+// active and is not bound to any single API.
+const FIT_API_TIMEOUT_MS = 10_000;
+
+function meguminApiBaseCandidates() {
+    const settings = oai_settings;
+    if (!settings) return [];
+    const bases = new Set();
+    for (const key of ["reverse_proxy", "custom_url", "azure_base_url"]) {
+        const raw = settings[key];
+        if (!raw) continue;
+        let url = String(raw).trim().replace(/\/+$/, "");
+        if (/\/v1$/.test(url)) url = url.replace(/\/v1$/, "");
+        if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+        if (url) bases.add(url);
+    }
+    return [...bases];
+}
+
+async function meguminApiTokenCount(text) {
+    if (!text) return 0;
+    for (const base of meguminApiBaseCandidates()) {
+        for (const path of ["/tokenize", "/v1/tokenize"]) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), FIT_API_TIMEOUT_MS);
+            try {
+                const response = await fetch(base + path, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ content: text }),
+                    signal: controller.signal,
+                });
+                if (!response.ok) continue;
+                const data = await response.json();
+                if (Array.isArray(data?.tokens)) return data.tokens.length;
+            } catch {
+                // Try the next candidate; a total failure falls back to the
+                // client-side counter below.
+            } finally {
+                clearTimeout(timer);
+            }
+        }
+    }
+    return null;
+}
+
 export async function meguminFitToContext(messages, dryRun) {
     if (dryRun || !Array.isArray(messages) || messages.length === 0) return;
 
@@ -79,27 +131,36 @@ export async function meguminFitToContext(messages, dryRun) {
     }
     if (!Number.isFinite(budget) || budget <= 0) return;
 
-    // Headroom for the gap between this client-side count and the API's own
-    // tokenizer, and for anything ST reserves that is not visible here.
-    const target = budget - 150;
-    if (target <= 0) return;
+    // Margin depends on which counter measures the payload. The API's own
+    // /tokenize (when the active provider exposes one) is exact, so a small
+    // cushion suffices. The client-side counter can be a different tokenizer
+    // than the model's (e.g. a Gemma model counted with GPT's cl100k), so it
+    // needs a wide margin — the observed gap is ~9%.
+    const fallbackTarget = budget - Math.max(150, Math.round(budget * 0.09));
+    if (fallbackTarget <= 0) return;
 
-    // Count the whole payload with ONE tokenizer call (the OAI counter is a
-    // network round-trip, so a per-message loop would stall generation). Eviction
-    // below is then done with per-message costs CALIBRATED from that one real
-    // total, so it costs no extra calls, and a final exact count confirms the
-    // result. The total never crosses the real budget: a pass only stops short
-    // when it cannot remove anything the rules allow.
+    // Count the whole payload with ONE call (either counter is a network
+    // round-trip, so a per-message loop would stall generation). Eviction below
+    // is then done with per-message costs CALIBRATED from that one real total,
+    // so it costs no extra calls, and a final exact count confirms the result.
+    // The total never crosses the real budget: a pass only stops short when it
+    // cannot remove anything the rules allow.
     let texts = messages.map(m => meguminFitContentToText(m?.content));
     const joinedChars = () => texts.reduce((n, t) => n + t.length, 0);
-    const countPayload = async () =>
-        (await getTokenCountAsync(texts.join("\n"))) + FIT_ROLE_OVERHEAD * messages.length;
+    let exact = false;
+    const countPayload = async () => {
+        const apiTokens = await meguminApiTokenCount(texts.join("\n"));
+        exact = apiTokens != null;
+        if (exact) return apiTokens + FIT_ROLE_OVERHEAD * messages.length;
+        return (await getTokenCountAsync(texts.join("\n"))) + FIT_ROLE_OVERHEAD * messages.length;
+    };
 
     // Cheap gate before any counting: even at the worst possible rate of one
     // token per character (dense CJK), a payload this short is under budget.
-    if (joinedChars() < target) return;
+    if (joinedChars() < fallbackTarget) return;
 
     let totalTokens = await countPayload();
+    const target = exact ? budget - Math.max(250, Math.round(budget * 0.01)) : fallbackTarget;
     if (totalTokens <= target) return;
 
     const contentTokens = totalTokens - FIT_ROLE_OVERHEAD * messages.length;

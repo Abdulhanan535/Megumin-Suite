@@ -33,6 +33,7 @@ export {
 } from "../../../../../script.js";
 
 export { getTokenCountAsync } from "../../../../../scripts/tokenizers.js";
+export { oai_settings } from "../../../../../scripts/openai.js";
 
 export { saveBase64AsFile, debounce, cancelDebounce } from "../../../../utils.js";
 export { humanizedDateTime } from "../../../../RossAscends-mods.js";
