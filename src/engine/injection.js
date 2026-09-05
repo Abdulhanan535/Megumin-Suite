@@ -6,7 +6,7 @@
 // NPC scan, memory summary). Everything it needs is already a module.
 // ────────────────────────────────────────────────────────────────────────────
 
-import { extension_settings, substituteParams, Popup, POPUP_TYPE } from "../st.js";
+import { extension_settings, substituteParams, Popup, POPUP_TYPE, getMaxPromptTokens, getTokenCountAsync } from "../st.js";
 import { getContext } from "../st.js";
 import { extensionName } from "../core/constants.js";
 import { localProfile } from "../core/state.js";
@@ -28,6 +28,119 @@ import { meguminAllSlotTriggers } from "../../data/slots.js";
 // Throttles the prompt-preview popup so token counting and rapid ST background
 // triggers can't stack popups. Read and written only by the injection handler.
 export let lastPromptPreviewTime = 0;
+
+// ── CONTEXT FIT ────────────────────────────────────────────────────────────
+// SillyTavern budgets THIS prompt before this hook fires: it counts the system
+// prompt with the [[...]] placeholders still collapsed (a few dozen tokens) and
+// fills the chat with as many messages as fit the result. When the slots expand
+// into the engine, blocks, memory and NPC content, the payload grows beyond the
+// budget and nothing in ST re-measures it — so a chat that "fits" the configured
+// context still 413s at the API.
+//
+// This closes the gap from the other side: after the expansion, it measures the
+// payload that is actually about to be sent and, if it no longer fits, removes
+// the oldest messages until it does — the same eviction ST would have performed
+// on its own had it known the final size. The budget is read live on every
+// generation (getMaxPromptTokens), so any context size works, and a budget the
+// user raises later needs no change here.
+//
+// It never removes the last user message (the turn being answered) or any system
+// message (the expanded preset lives in one), so the only case it cannot fix is
+// a fixed prompt that alone exceeds the context — which it reports, since no
+// message eviction can help.
+let _lastFitToast = 0;
+
+// Flat per-role overhead the chat-completion format adds around every message,
+// and a fixed stand-in cost for image parts, which the text tokenizer cannot see.
+const FIT_ROLE_OVERHEAD = 4;
+const FIT_IMAGE_STANDIN_CHARS = 400;
+
+function meguminFitContentToText(content) {
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+        let text = "";
+        for (const part of content) {
+            if (part?.type === "text") text += part.text;
+            else if (part?.type === "image_url") text += " ".repeat(FIT_IMAGE_STANDIN_CHARS);
+        }
+        return text;
+    }
+    return "";
+}
+
+export async function meguminFitToContext(messages, dryRun) {
+    if (dryRun || !Array.isArray(messages) || messages.length === 0) return;
+
+    let budget;
+    try {
+        budget = getMaxPromptTokens();
+    } catch {
+        return;
+    }
+    if (!Number.isFinite(budget) || budget <= 0) return;
+
+    // Headroom for the gap between this client-side count and the API's own
+    // tokenizer, and for anything ST reserves that is not visible here.
+    const target = budget - 150;
+    if (target <= 0) return;
+
+    // Count the whole payload with ONE tokenizer call (the OAI counter is a
+    // network round-trip, so a per-message loop would stall generation). Eviction
+    // below is then done with per-message costs CALIBRATED from that one real
+    // total, so it costs no extra calls, and a final exact count confirms the
+    // result. The total never crosses the real budget: a pass only stops short
+    // when it cannot remove anything the rules allow.
+    let texts = messages.map(m => meguminFitContentToText(m?.content));
+    const joinedChars = () => texts.reduce((n, t) => n + t.length, 0);
+    const countPayload = async () =>
+        (await getTokenCountAsync(texts.join("\n"))) + FIT_ROLE_OVERHEAD * messages.length;
+
+    // Cheap gate before any counting: even at the worst possible rate of one
+    // token per character (dense CJK), a payload this short is under budget.
+    if (joinedChars() < target) return;
+
+    let totalTokens = await countPayload();
+    if (totalTokens <= target) return;
+
+    const contentTokens = totalTokens - FIT_ROLE_OVERHEAD * messages.length;
+    const chars = joinedChars();
+    // Cost per character for the real tokenizer, nudged up so the estimate errs
+    // toward removing a little more rather than landing over the line.
+    const ratio = Math.max((contentTokens / Math.max(1, chars)), 0.25) * 1.15;
+
+    const lastUserMsg = [...messages].reverse().find(m => m?.role === "user") ?? null;
+    let removed = 0;
+    let index = 0;
+
+    for (let pass = 0; pass < 3 && totalTokens > target; pass++) {
+        const before = removed;
+        while (index < messages.length && totalTokens > target) {
+            if (messages[index] === lastUserMsg) break;     // the turn being answered is untouchable
+            if (messages[index]?.role === "system") { index++; continue; }  // the expanded preset rides in here
+            totalTokens -= texts[index].length * ratio + FIT_ROLE_OVERHEAD;
+            messages.splice(index, 1);
+            texts.splice(index, 1);
+            removed++;
+        }
+        // Land on it only if the calibrated pass claims to have; else re-sync with
+        // one exact count and try again. Bounded, so a stubborn payload cannot loop.
+        if (totalTokens > target) {
+            if (removed === before || index >= messages.length) break;
+            totalTokens = await countPayload();
+        }
+    }
+
+    if (removed > 0) {
+        console.info(`[Megumin Suite] Prompt exceeded the ${budget}-token context budget once expanded; removed ${removed} oldest message(s) so it fits.`);
+        const now = Date.now();
+        if (now - _lastFitToast > 5 * 60 * 1000) {
+            _lastFitToast = now;
+            toastr.info(`Fitting to context budget: removed ${removed} old message(s). Lower Memory Core limits if this happens every turn.`, "Megumin Suite");
+        }
+    } else if (totalTokens > target) {
+        console.warn(`[Megumin Suite] Prompt is still over the ${target}-token budget with nothing left to remove — the fixed prompt (preset/engine/blocks) alone is larger than the context. Shrink the fixed prompt or raise the context size.`);
+    }
+}
 
 export async function handlePromptInjection(data, type) {
     const messages = data?.messages || data?.chat || (Array.isArray(data) ? data : null);
@@ -371,6 +484,10 @@ export async function handlePromptInjection(data, type) {
         }
         clearActiveNpcImages();
     }
+
+    // ST budgeted this prompt with the placeholders collapsed; trim it back into
+    // the live context budget now that they are expanded.
+    await meguminFitToContext(messages, data?.dryRun === true);
 
     if (replacementsMade > 0 && !activeGenerationOrder) {
         console.log(`[${extensionName}] ✅ Executed ${replacementsMade} block replacements.`);
